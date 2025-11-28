@@ -36,7 +36,7 @@ if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
 st.set_page_config(page_title="MACD 極早金死叉 v7.5", layout="wide")
 st.sidebar.header("即時監控設定")
 
-default_tickers = "TSLA,NVDA,AAPL,META,AMD,SMCI,COIN,NIO,2330.TW,2317.TW,2454.TW"
+default_tickers = "TSLA,NVDA,AAPL,META"
 input_tickers = st.sidebar.text_input("股票代號（逗號分隔）", value=default_tickers)
 
 SYMBOLS = [s.strip().upper() for s in input_tickers.split(",") if s.strip()]
@@ -48,7 +48,7 @@ st.sidebar.success(f"監控 {len(SYMBOLS)} 檔")
 interval_options = ["1m","2m","5m","15m","30m","60m","1h","1d"]
 selected_interval = st.sidebar.selectbox("K線週期", interval_options, index=2)  # 預設 5m
 period_options = ["1d","5d","7d","30d","60d","6mo","1y","max"]
-selected_period = st.sidebar.selectbox("資料範圍", period_options, index=2)     # 預設 7d
+selected_period = st.sidebar.selectbox("資料範圍", period_options, index=1)     # 預設 7d
 
 refresh_options = [30,45,60,90,120,180,300]
 REFRESH_INTERVAL = st.sidebar.selectbox("刷新間隔（秒）", refresh_options, index=2)
