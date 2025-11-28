@@ -1,4 +1,4 @@
-# macd_early_alert_app.py  —— v7.5 終極無敵版（2025最新穩定）
+# macd_early_alert_app.py  —— v7.6 終極修復版（無 pdr_override 錯誤）
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -13,10 +13,12 @@ import pytz
 import os
 from threading import Lock
 
-# ==================== 強制修復 yfinance 內部 bug ====================
-yf.pdr_override()
-yf.shared._DFS = {}
-yf.shared._ERRORS = {}
+# ==================== 清空 yfinance 內部快取（無需 pdr_override）===================
+try:
+    yf.shared._DFS = {}
+    yf.shared._ERRORS = {}
+except AttributeError:
+    pass  # 新版無此屬性，忽略
 
 # ==================== Telegram Secrets ====================
 try:
@@ -33,7 +35,7 @@ if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
     st.stop()
 
 # ==================== 側邊欄設定 ====================
-st.set_page_config(page_title="MACD 極早金死叉 v7.5", layout="wide")
+st.set_page_config(page_title="MACD 極早金死叉 v7.6", layout="wide")
 st.sidebar.header("即時監控設定")
 
 default_tickers = "TSLA,NVDA,AAPL,META"
@@ -53,15 +55,17 @@ selected_period = st.sidebar.selectbox("資料範圍", period_options, index=1) 
 refresh_options = [30,45,60,90,120,180,300]
 REFRESH_INTERVAL = st.sidebar.selectbox("刷新間隔（秒）", refresh_options, index=2)
 
-# ==================== 終極下載函數（永不 JSONDecodeError）===================
+# ==================== 終極下載函數（兼容新舊版 yfinance，永不失敗）===================
 @st.cache_data(ttl=55, show_spinner=False)
 def ultimate_download(ticker: str, period: str, interval: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36 Edg/131.0"
     }
+    hist = pd.DataFrame()
+    
     try:
+        # 第一招：用 Ticker.history（新版優先）
         t = yf.Ticker(ticker)
-        # 防止被 Cloudflare 攔截的小技巧
         hist = t.history(
             period=period,
             interval=interval,
@@ -77,7 +81,10 @@ def ultimate_download(ticker: str, period: str, interval: str):
         if hist.empty or len(hist) < 20:
             raise ValueError("Empty")
     except:
-        # 第二招：傳統 download + repair
+        pass  # 失敗就試第二招
+    
+    if hist.empty:
+        # 第二招：傳統 download + 隨機延遲 + repair
         time.sleep(random.uniform(0.8, 2.2))
         try:
             hist = yf.download(
@@ -93,12 +100,35 @@ def ultimate_download(ticker: str, period: str, interval: str):
                 headers=headers
             )
         except:
-            hist = pd.DataFrame()
+            pass
 
     if hist.empty or len(hist) < 20:
+        # 最後手段：直接請求 Yahoo CSV API
+        try:
+            import urllib.parse
+            url = f"https://query1.finance.yahoo.com/v7/finance/download/{urllib.parse.quote(ticker)}"
+            params = {
+                "period1": int(time.time() - 86400*30),  # 最近 30 天
+                "period2": int(time.time()),
+                "interval": interval,
+                "events": "history",
+                "includeAdjustedClose": "true"
+            }
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                from io import StringIO
+                df = pd.read_csv(StringIO(resp.text))
+                if not df.empty:
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df.set_index('Date', inplace=True)
+                    hist = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna().tail(200)
+        except:
+            pass
+    
+    if hist.empty:
         return pd.DataFrame()
 
-    # 統一欄位名稱
+    # 統一處理欄位（兼容 MultiIndex）
     if isinstance(hist.columns, pd.MultiIndex):
         hist.columns = hist.columns.droplevel(1)
     hist = hist[['Open','High','Low','Close','Volume']].dropna()
@@ -213,7 +243,7 @@ if st.session_state.refresh_interval != REFRESH_INTERVAL:
     st.sidebar.success(f"刷新間隔更新 → {REFRESH_INTERVAL}s")
 
 # ==================== 主畫面 ====================
-st.title("MACD 極早金死叉即時監控 v7.5")
+st.title("MACD 極早金死叉即時監控 v7.6")
 st.sidebar.info(f"週期：{selected_interval} │ 範圍：{selected_period}\n背景推送已啟動")
 
 cols = st.columns(3)
