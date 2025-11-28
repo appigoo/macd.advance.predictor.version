@@ -1,6 +1,6 @@
-streamlit==1.38.0
-yfinance==0.2.38        # 這版本最穩！千萬不要用最新版
-plotly==5.24.1
-pandas==2.2.3
-requests==2.32.3
+streamlit
+yfinance==0.2.44
+plotly
+pandas
+requests
 pytz
