@@ -24,43 +24,52 @@ except:
         st.error("請設定 Telegram Bot Token（.streamlit/secrets.toml 或 Streamlit Cloud Secrets）")
         st.stop()
 
-# ==================== 2. 股票與週期選項 ====================
-SYMBOLS = ["TSLA", "AAPL", "NVDA", "META", "NIO", "GOOGL", "XPEV"]
+# ==================== 2. 動態股票輸入框 ====================
+st.sidebar.header("自訂監控股票")
+default_tickers = "TSLA, NVDA, AAPL, META, AMD, SMCI, COIN, HOOD, NIO, XPEV, TSLL, MARA"
+input_tickers = st.sidebar.text_input(
+    "請輸入股票代號（逗號分隔，支持美股、港股、台股加.TW）",
+    value=default_tickers,
+    help="例如：TSLA, 0700.HK, 2330.TW, NVDA"
+)
 
+# 自動解析並清理輸入
+raw_symbols = [s.strip().upper() for s in input_tickers.split(",") if s.strip()]
+if not raw_symbols:
+    st.error("請至少輸入一檔股票！")
+    st.stop()
+
+# 動態股票清單（每次輸入都會即時更新）
+SYMBOLS = raw_symbols
+st.sidebar.success(f"正在監控 {len(SYMBOLS)} 檔股票：{', '.join(SYMBOLS)}")
+
+# ==================== 3. 週期選擇 ====================
 interval_options = ["1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"]
 period_options   = ["1d", "5d", "7d", "30d", "60d", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
 
-# ==================== 3. 側邊欄設定 ====================
-st.sidebar.header("即時參數設定")
 selected_interval = st.sidebar.selectbox("K線週期 (Interval)", interval_options, index=2)  # 預設 5m
 selected_period   = st.sidebar.selectbox("資料範圍 (Period)", period_options, index=1)    # 預設 5d
 
-# ==================== 4. 關鍵修復：自動限制 Period（永不出錯）===================
+# ==================== 4. 自動修正 Period（永不出錯）===================
 def get_valid_period(interval: str, requested: str) -> str:
     limits = {
-        "1m":  "7d",
-        "2m":  "60d", "5m": "60d", "15m": "60d", "30m": "60d",
+        "1m": "7d",
+        "2m": "60d", "5m": "60d", "15m": "60d", "30m": "60d",
         "60m": "730d", "90m": "730d", "1h": "730d"
     }
-    max_allowed = limits.get(interval, "max")  # 1d 以上都支援 max
-
+    max_allowed = limits.get(interval, "max")
     if max_allowed == "max":
         return requested
-
     if interval == "1m" and requested not in ["1d", "5d", "7d"]:
-        st.sidebar.warning("1分鐘K線最多支援7天，已自動調整為 7d")
+        st.sidebar.warning("1分鐘K線最多7天 → 已自動調整")
         return "7d"
-    elif interval in ["2m", "5m", "15m", "30m"] and requested not in ["1d", "5d", "7d", "30d", "60d"]:
-        st.sidebar.warning(f"{interval} 最多支援60天，已自動調整為 60d")
+    if interval in ["2m", "5m", "15m", "30m"] and requested not in ["1d", "5d", "7d", "30d", "60d"]:
+        st.sidebar.warning(f"{interval} 最多60天 → 已自動調整")
         return "60d"
-    else:
-        return requested
+    return requested
 
-# 真正使用的 period（已自動修正）
 selected_period = get_valid_period(selected_interval, selected_period)
-
-# 根據 interval 調整更新頻率
-REFRESH_SECONDS = 20 if selected_interval in ["1m", "2m"] else 40 if selected_interval in ["5m", "15m"] else 60
+REFRESH_SECONDS = 20 if selected_interval in ["1m","2m"] else 40 if selected_interval in ["5m","15m"] else 60
 
 MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 sent_signals = defaultdict(lambda: {"bull": None, "bear": None})
@@ -91,17 +100,10 @@ def macd_early_signal(df):
     s0 = dea.iloc[-1]
     h2, h1, h0 = histogram.iloc[-3], histogram.iloc[-2], histogram.iloc[-1]
 
-    # 快線勾頭
-    slope_before = d1 - d2
-    slope_now = d0 - d1
-    hook_up = slope_before <= 0 and slope_now > slope_before * 0.5
-    hook_down = slope_before >= 0 and slope_now < slope_before * 0.5
-
-    # 柱狀體縮短
-    shrink_red = h1 > h2 > 0 and h0 < h1 and h0 > 0
+    hook_up   = (d1 - d2) <= 0 and (d0 - d1) > (d1 - d2) * 0.5
+    hook_down = (d1 - d2) >= 0 and (d0 - d1) < (d1 - d2) * 0.5
+    shrink_red   = h1 > h2 > 0 and h0 < h1 and h0 > 0
     shrink_green = h1 < h2 < 0 and h0 > h1 and h0 < 0
-
-    # 距離極近
     distance = abs(d0 - s0)
     std = abs(dif - dea).rolling(30).std().iloc[-1]
     very_close = std > 0 and distance < std * 0.4
@@ -114,7 +116,7 @@ def macd_early_signal(df):
 # ==================== 7. 繪圖 ====================
 def plot_macd(symbol, macd_data, df):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        subplot_titles=(f"{symbol} 價格走勢", f"MACD 提前訊號 ({selected_interval})"),
+                        subplot_titles=(f"{symbol} 價格", f"MACD 提前訊號 ({selected_interval})"),
                         vertical_spacing=0.05, row_heights=[0.6, 0.4])
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線"), row=1, col=1)
@@ -131,10 +133,10 @@ def plot_macd(symbol, macd_data, df):
         fig.add_annotation(x=last_time, y=macd_data["dif"].iloc[-1], text="即將死叉！", showarrow=True,
                            arrowcolor="red", bgcolor="darkred", font=dict(color="white"), row=2, col=1)
 
-    fig.update_layout(height=720, showlegend=False, title=f"{symbol} • 更新時間: {datetime.now(pytz.timezone('Asia/Taipei')).strftime('%H:%M:%S')}")
+    fig.update_layout(height=720, showlegend=False, title=f"{symbol} • {selected_interval} • {datetime.now(pytz.timezone('Asia/Taipei')).strftime('%H:%M:%S')}")
     return fig
 
-# ==================== 8. 背景監控執行緒 ====================
+# ==================== 8. 背景監控（支援動態股票）===================
 def background_monitor():
     while True:
         tw_time = datetime.now(pytz.timezone('Asia/Taipei')).strftime("%H:%M")
@@ -148,12 +150,12 @@ def background_monitor():
                 key = df.index[-1].strftime("%m/%d %H:%M")
 
                 if result["bull_early"] and sent_signals[symbol]["bull"] != key:
-                    msg = f"多頭訊號\n<b>{symbol}</b> {selected_interval}線\n時間 {tw_time}\n<u>MACD 極強提前金叉</u>\n預計 1~5根內金叉！"
+                    msg = f"MACD提前金叉\n<b>{symbol}</b> {selected_interval}線\n時間 {tw_time}\n<u>極強多頭訊號</u>\n預計 1~5根內金叉！"
                     send_telegram(msg)
                     sent_signals[symbol]["bull"] = key
 
                 if result["bear_early"] and sent_signals[symbol]["bear"] != key:
-                    msg = f"空頭訊號\n<b>{symbol}</b> {selected_interval}線\n時間 {tw_time}\n<u>MACD 極強提前死叉</u>\n預計 1~5根內死叉！"
+                    msg = f"MACD提前死叉\n<b>{symbol}</b> {selected_interval}線\n時間 {tw_time}\n<u>極強空頭訊號</u>\n預計 1~5根內死叉！"
                     send_telegram(msg)
                     sent_signals[symbol]["bear"] = key
             except:
@@ -166,12 +168,13 @@ if 'monitor_started' not in st.session_state:
     st.session_state.monitor_started = True
 
 # ==================== 9. 主畫面 ====================
-st.set_page_config(page_title="MACD 多週期提前監控", layout="wide")
-st.title("MACD 多週期極早金死叉監控系統")
+st.set_page_config(page_title="MACD 動態股票監控", layout="wide")
+st.title("MACD 極早金死叉即時監控系統（支援自訂股票）")
 
-st.sidebar.success(f"目前設定：{selected_interval} │ {selected_period}")
-st.sidebar.info(f"監控 {len(SYMBOLS)} 檔股票\n自動更新頻率：{REFRESH_SECONDS} 秒")
+st.sidebar.success(f"目前週期：{selected_interval} │ 範圍：{selected_period}")
+st.sidebar.info(f"自動更新：每 {REFRESH_SECONDS} 秒\n背景推送已啟動")
 
+# 顯示所有股票圖表
 cols = st.columns(3)
 for i, symbol in enumerate(SYMBOLS):
     with cols[i % 3]:
@@ -192,9 +195,9 @@ for i, symbol in enumerate(SYMBOLS):
                     else:
                         st.info("觀察中")
                 else:
-                    st.warning("資料載入中...")
-            except:
-                st.error("連線異常")
-        time.sleep(0.3)
+                    st.warning(f"{symbol} 資料不足")
+            except Exception as e:
+                st.error(f"{symbol} 無法載入")
+        time.sleep(0.2)
 
-st.caption(f"背景監控執行中 • {selected_interval} / {selected_period} • 自動更新中...")
+st.caption(f"背景監控執行中 • 監控 {len(SYMBOLS)} 檔 • {selected_interval}/{selected_period} • 自動更新中...")
